@@ -7,17 +7,23 @@ Code accompanying:
 > *Cancer Informatics*. 2026;25:11769351261460625.  
 > https://doi.org/10.1177/11769351261460625
 
-## What this repository contains
+Single-cell RNA-seq analysis of GFAP-related transcriptional dynamics and cellular heterogeneity across primary GBM, recurrent glioma, and grade III samples from GEO [GSE103224](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE103224).
 
-Analysis of GFAP-related transcriptional dynamics and cellular heterogeneity across primary, recurrent, and grade III gliomas.
+## Repository layout
 
-## Status
+- `scripts/scRNA_seurat.R` — QC, Harmony integration, clustering, annotation, and differential expression
+- `scripts/trajectory.R` — trajectory analysis
 
-Analysis scripts will be added to `scripts/`.
+## Requirements
 
-## Data policy
+R ≥ 4.2 and:
 
-Public datasets only. No identifiable patient data.
+```r
+install.packages(c(
+  "Seurat", "tidyverse", "harmony", "patchwork",
+  "cowplot", "data.table", "BiocManager"
+))
+BiocManager::install("metap")
 
 ## Citation
 
