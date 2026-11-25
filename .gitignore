@@ -1,0 +1,14 @@
+# R
+.Rhistory
+.RData
+.Rproj.user
+*.Rproj
+*.RDS
+*.rds
+
+# macOS
+.DS_Store
+
+# Input data and generated outputs (large)
+data/
+results/
