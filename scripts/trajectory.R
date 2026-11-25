@@ -1,197 +1,272 @@
-# Monocle3 trajectory for GFAP-related glioma subsets
-# Cleaned from the lab script used for Radial & cycling cells in recurrence.
+################################################################################
+# Monocle3 trajectory analysis
+# Input: an annotated Seurat object written by scripts/scRNA_seurat.R
 # Hadizadeh M, Mousavi SZ, Ghasemi S.
 # Cancer Informatics. 2026;25:11769351261460625.
 # https://doi.org/10.1177/11769351261460625
-# Expected input: a Seurat .rds with UMAP and identities already defined.
+################################################################################
 
+# ==============================================================================
+# CONFIG — run this script from the repository root, after scRNA_seurat.R
+# ==============================================================================
+results_dir <- "results"
+
+# Which condition subset to use. Files written by scRNA_seurat.R:
+#   results/seurat_GBM.rds
+#   results/seurat_Rec.rds
+#   results/seurat_gIII.rds
+condition <- "Rec"
+
+# Optional: restrict to these Seurat identities. Set to NULL to use all cells.
+# The original lab script ran this trajectory on radial glial and cancer
+# cells in the recurrent-glioma subset. Edit to match the figure you want.
+keep_idents <- c("Radial glial", "Cancer cells")
+
+# Cell type used to place the trajectory root (non-interactive).
+# This follows the standard Monocle3 vignette pattern (principal-graph node
+# closest to the most cells of this identity). Set to NULL to choose the
+# root interactively with the Monocle3 shiny app instead.
+root_ident <- "Radial glial"
+
+# Example genes plotted along pseudotime in the original analysis.
+example_genes <- c("APOE", "ID4", "AQP4", "ITM2C", "CLU", "ID3")
+
+# ==============================================================================
+# Libraries
+# ==============================================================================
 library(Seurat)
 library(tidyverse)
-library(dplyr)
 library(monocle3)
 library(SeuratWrappers)
-library(ggplot2)
-library(ggridges)
 library(SingleCellExperiment)
+library(ggplot2)
+library(pheatmap)
 
-#data<- obj
-input_rds <- "Radial&CC in Rec.RDS"
-data <- readRDS(input_rds)
+# ==============================================================================
+# Load the Seurat object written by scRNA_seurat.R
+# ==============================================================================
+input_rds <- file.path(results_dir, paste0("seurat_", condition, ".rds"))
+if (!file.exists(input_rds)) {
+  stop(
+    "Cannot find ", input_rds, ".\n",
+    "Run scripts/scRNA_seurat.R first, from the repository root."
+  )
+}
 
-# ---------------------------------------------------------------------------
-# Delete Cluster(s)
-# ---------------------------------------------------------------------------
-table(obj$seurat_clusters)
-seurat_obj_filtered <- subset(obj, idents = c(7, 8), invert = TRUE)
-table(seurat_obj_filtered$seurat_clusters)
-data <- sub_obj
+dir.create(results_dir, showWarnings = FALSE, recursive = TRUE)
+out_prefix <- file.path(results_dir, paste0("trajectory_", condition))
 
-#If needed
-data <- JoinLayers(data)
+obj <- readRDS(input_rds)
 
-# ---------------------------------------------------------------------------
-# Add Count Layer to sobj
-# ---------------------------------------------------------------------------
-count.data <- GetAssayData(object = data, assay = "RNA", layer = "count")
-class(count.data)
-data[["RNA_counts"]] <- CreateAssayObject(counts = count.data)
-DefaultAssay(data) <- "RNA_counts"
+# Seurat v5: combine layers so Monocle can see a single counts matrix
+if (exists("JoinLayers", mode = "function")) {
+  obj <- tryCatch(JoinLayers(obj), error = function(e) obj)
+}
 
-# ---------------------------------------------------------------------------
-# Converting Seurat object to celldataset object for Monocle3
-# ---------------------------------------------------------------------------
-cds <- as.cell_data_set(data)
-cds <- cluster_cells(cds)
+if (!is.null(keep_idents)) {
+  present <- levels(Idents(obj))
+  missing <- setdiff(keep_idents, present)
+  if (length(missing)) {
+    stop(
+      "These identities are not in the object: ",
+      paste(missing, collapse = ", "),
+      "\nAvailable identities: ", paste(present, collapse = ", ")
+    )
+  }
+  obj <- subset(obj, idents = keep_idents)
+}
 
-# ---------------------------------------------------------------------------
-#cds@colData$ident <- factor(cds@colData$ident,
-#                            levels = c("Epithelial_PTC", "Epithelial_ATC"))
-#plot_cells(cds, color_cells_by = "celltype.status", group_label_size = 3)
+# ==============================================================================
+# Convert to a Monocle3 cell_data_set; keep Seurat UMAP and cluster labels
+# ==============================================================================
+cds <- as.cell_data_set(obj)
+reducedDim(cds, "UMAP") <- Embeddings(obj, "umap")
 
-#Get cell metadata
-head(colData(cds))
-#Get feature/gene metadata
-fData(cds)
-rownames(fData(cds))[1:10]
+# Single partition so learn_graph builds one trajectory
+recreate_partitions <- factor(rep(1, ncol(cds)))
+names(recreate_partitions) <- colnames(cds)
+cds@clusters[["UMAP"]][["partitions"]] <- recreate_partitions
+
+seurat_idents <- Idents(obj)
+names(seurat_idents) <- colnames(obj)
+cds@clusters[["UMAP"]][["clusters"]] <- seurat_idents
+
 fData(cds)$gene_short_name <- rownames(fData(cds))
-head(fData(cds))
-head(pData(cds))
-#Get counts
-head(counts(cds))
-# ---------------------------------------------------------------------------
-# Retrieve clustering information from Surat object
-# ---------------------------------------------------------------------------
-#Assign partitions
-recreate.partitions <- c(rep(1, length(cds@colData@rownames)))
-names(recreate.partitions) <- cds@colData@rownames
-recreate.partitions <- as.factor(recreate.partitions)
-recreate.partitions
-cds@clusters@listData[["UMAP"]][["partitions"]] <- recreate.partitions
 
-#Assign cluster information
-list.cluster <- data@active.ident
-cds@clusters@listData[["UMAP"]][["clusters"]] <- list.cluster
-
-#Assign UMAP coordinates
-cds@int_colData@listData[["reducedDims"]]@listData[["UMAP"]] <- data@reductions$umap@cell.embeddings
-
-#Plot
-cluster.before.traj <- plot_cells(cds,
-                                  color_cells_by = "cluster",
-                                  label_groups_by_cluster = TRUE,
-                                  group_label_size = 5) +
+p <- plot_cells(
+  cds,
+  color_cells_by = "cluster",
+  label_groups_by_cluster = TRUE,
+  group_label_size = 5
+) +
   theme(
     legend.position = "right",
     axis.line = element_line(linewidth = 0.5),
     axis.ticks = element_line(linewidth = 0.5)
   )
-cluster.before.traj
+ggsave(paste0(out_prefix, "_clusters.png"), p, width = 8, height = 6)
 
-# ---------------------------------------------------------------------------
-# Learn Trajectory
-# ---------------------------------------------------------------------------
-cds <- learn_graph(cds, use_partition = F)
-plot_cells(cds,
-           color_cells_by = "cluster",
-           label_groups_by_cluster = FALSE,
-           label_branch_points = TRUE,
-           label_roots = TRUE,
-           label_leaves = FALSE,
-           group_label_size = 5) +
+# ==============================================================================
+# Learn the trajectory and order cells in pseudotime
+# ==============================================================================
+cds <- learn_graph(cds, use_partition = FALSE)
+
+p <- plot_cells(
+  cds,
+  color_cells_by = "cluster",
+  label_groups_by_cluster = FALSE,
+  label_branch_points = TRUE,
+  label_roots = TRUE,
+  label_leaves = FALSE,
+  group_label_size = 5
+) +
   theme(
     axis.line = element_line(linewidth = 0.5),
     axis.ticks = element_line(linewidth = 0.5)
   )
+ggsave(paste0(out_prefix, "_graph.png"), p, width = 8, height = 6)
 
-# ---------------------------------------------------------------------------
-# Order cells in Pseudotime
-# ---------------------------------------------------------------------------
-#cds <- order_cells(cds, reduction_method = "UMAP", root_cells = colnames(cds[, clusters(cds) == 5]))
-cds <- order_cells(cds, reduction_method = "UMAP", root_cells = NULL)
-plot_cells(cds, color_cells_by = "pseudotime", label_groups_by_cluster = T, graph_label_size = 3,
-           label_branch_points = F, label_roots = T, label_leaves = F)
+# Principal-graph node closest to the most cells of root_ident
+# (Monocle3 vignette pattern), so order_cells() can run non-interactively.
+pick_root_pr_nodes <- function(cds, root_ident) {
+  closest_vertex <- cds@principal_graph_aux[["UMAP"]]$pr_graph_cell_proj_closest_vertex
+  closest_vertex <- as.matrix(closest_vertex[colnames(cds), , drop = FALSE])
 
-#cds<- saveRDS(cds, "cds.RDS")
-#cds<- readRDS("cds.RDS")
+  cluster_labels <- as.character(clusters(cds))
+  names(cluster_labels) <- names(clusters(cds))
+  in_root <- cluster_labels[colnames(cds)] == root_ident
+  if (!any(in_root) && "ident" %in% colnames(colData(cds))) {
+    in_root <- as.character(colData(cds)$ident) == root_ident
+  }
+  if (!any(in_root)) {
+    stop("No cells with identity '", root_ident, "' were found to place the root.")
+  }
 
-#Cells ordered by Monocle3 Pseudotime
-head(pseudotime(cds), 10)
-cds$monocle3_pseudotime <- pseudotime(cds)
-data.pseudo <- as.data.frame(colData(cds))
+  root_counts <- table(closest_vertex[in_root, 1])
+  igraph::V(principal_graph(cds)[["UMAP"]])$name[
+    as.numeric(names(which.max(root_counts)))
+  ]
+}
 
-ggplot(data.pseudo, aes(monocle3_pseudotime, ident, fill = ident)) +
+if (is.null(root_ident)) {
+  cds <- order_cells(cds, reduction_method = "UMAP")
+} else {
+  root_pr_nodes <- pick_root_pr_nodes(cds, root_ident)
+  cds <- order_cells(cds, reduction_method = "UMAP", root_pr_nodes = root_pr_nodes)
+}
+
+p <- plot_cells(
+  cds,
+  color_cells_by = "pseudotime",
+  label_groups_by_cluster = FALSE,
+  label_branch_points = FALSE,
+  label_roots = TRUE,
+  label_leaves = FALSE,
+  graph_label_size = 3
+)
+ggsave(paste0(out_prefix, "_pseudotime.png"), p, width = 8, height = 6)
+
+colData(cds)$monocle3_pseudotime <- pseudotime(cds)
+data_pseudo <- as.data.frame(colData(cds))
+data_pseudo$ident <- as.character(clusters(cds)[rownames(data_pseudo)])
+
+p <- ggplot(
+  data_pseudo,
+  aes(monocle3_pseudotime, reorder(ident, monocle3_pseudotime), fill = ident)
+) +
   geom_boxplot() +
+  labs(x = "Pseudotime", y = "Identity") +
+  theme_bw() +
   theme(
-    axis.text = element_text(size = 18),
+    legend.position = "none",
+    axis.text = element_text(size = 12),
     axis.title = element_text(size = 14)
   )
+ggsave(paste0(out_prefix, "_pseudotime_boxplot.png"), p, width = 8, height = 6)
 
-ggplot(data.pseudo, aes(monocle3_pseudotime, reorder(ident, monocle3_pseudotime), fill = ident)) +
-  geom_boxplot() +
-  theme(
-    axis.text = element_text(size = 18),
-    axis.title = element_text(size = 14)
-  )
-# ---------------------------------------------------------------------------
-# Find genes that change as a function of pseudotime
-# ---------------------------------------------------------------------------
+saveRDS(cds, paste0(out_prefix, "_cds.rds"))
+
+# ==============================================================================
+# Genes that change as a function of pseudotime
+# ==============================================================================
 deg <- graph_test(cds, neighbor_graph = "principal_graph")
+deg <- deg[order(deg$q_value), ]
+write.csv(deg, paste0(out_prefix, "_pseudotime_degs.csv"))
 
-saveRDS(deg, "deg(PT).RDS")
-deg <- readRDS("deg-Rec.RDS")
-deg %>% arrange(q_value) %>% filter(status == "OK") %>% head()
-write.csv(deg, "deg(PT).csv")
-head(deg)
+# ==============================================================================
+# Gene modules among significant trajectory genes
+# ==============================================================================
+pr_deg_ids <- rownames(subset(deg, q_value < 0.05 & morans_I > 0.1))
+if (length(pr_deg_ids) >= 2) {
+  cds <- preprocess_cds(cds)
+  gene_module_df <- find_gene_modules(cds[pr_deg_ids, ], resolution = 1e-2)
+  write.csv(gene_module_df, paste0(out_prefix, "_gene_modules.csv"), row.names = FALSE)
 
-# ---------------------------------------------------------------------------
-# Module & HeaatMap
-# ---------------------------------------------------------------------------
-pr_deg_ids <- row.names(subset(deg, q_value < 0.05 & morans_I > 0.1))
-head(pr_deg_ids)
-cds <- preprocess_cds(cds)
-gene_module_df <- find_gene_modules(cds[pr_deg_ids,], resolution = 1e-2)
-head(gene_module_df)
-write.csv(gene_module_df, "gene_module_df(PT).csv")
-colData(cds)
-cell_group_df <- tibble::tibble(cell = row.names(colData(cds)),
-                                cell_group = colData(cds)$ident)
-agg_mat <- aggregate_gene_expression(cds, gene_module_df, cell_group_df)
-row.names(agg_mat) <- stringr::str_c("Module ", row.names(agg_mat))
-pheatmap::pheatmap(agg_mat,
-                   scale = "column", clustering_method = "ward.D2")
+  cell_group_df <- tibble::tibble(
+    cell = rownames(colData(cds)),
+    cell_group = as.character(clusters(cds)[rownames(colData(cds))])
+  )
+  agg_mat <- aggregate_gene_expression(cds, gene_module_df, cell_group_df)
+  rownames(agg_mat) <- paste("Module", rownames(agg_mat))
 
-# ---------------------------------------------------------------------------
-# Feature & Ridge Plot
-# ---------------------------------------------------------------------------
-FeaturePlot(data, features = c("APOE", "ID4", "AQP4", "ITM2C", "CLU", "ID3"))
-#RidgePlot(data, features = c("PRSS1", "PID1", "MEG8"), sort = T, idents = c("Epithelial", "DC", "Endothelial"))
+  png(
+    paste0(out_prefix, "_module_heatmap.png"),
+    width = 8, height = 6, units = "in", res = 150
+  )
+  pheatmap::pheatmap(agg_mat, scale = "column", clustering_method = "ward.D2")
+  dev.off()
+} else {
+  message("Not enough significant trajectory genes for module analysis.")
+}
 
-# ---------------------------------------------------------------------------
-# Expression in Pseudotime (ok)
-# ---------------------------------------------------------------------------
-my_genes <- row.names(subset(fData(cds), gene_short_name %in% c("APOE", "ID4", "AQP4", "ITM2C", "CLU", "ID3")))
-cds_subset <- cds[my_genes,]
-cds_subset@colData$monocle3_pseudotime <- clusters(cds_subset)
-plot_genes_in_pseudotime(cds_subset, color_cells_by = "monocle3_pseudotime", cell_size = 2)
+# ==============================================================================
+# Example gene plots
+# ==============================================================================
+available <- example_genes[example_genes %in% fData(cds)$gene_short_name]
+if (length(available) == 0) {
+  message("None of the example genes were found in the object; skipping gene plots.")
+} else {
+  p <- FeaturePlot(obj, features = available)
+  ggsave(paste0(out_prefix, "_example_featureplot.png"), p, width = 10, height = 8)
 
-# ---------------------------------------------------------------------------
-# Expression in Pseudotime (not-changed)
-# ---------------------------------------------------------------------------
-plot_genes_in_pseudotime(subset(cds_subset,
-                                rowData(cds_subset)$gene_short_name %in% my_genes),
-                         min_expr = 0.5, color_cells_by = "monocle3_pseudotime")
-# ---------------------------------------------------------------------------
-# bold dot Plot
-# ---------------------------------------------------------------------------
-plot_cells(cds_subset, label_cell_groups = FALSE, genes = my_genes,
-           show_trajectory_graph = FALSE, cell_size = 1)
+  cds_subset <- cds[rownames(subset(fData(cds), gene_short_name %in% available)), ]
+  p <- plot_genes_in_pseudotime(
+    cds_subset,
+    color_cells_by = "pseudotime",
+    cell_size = 1
+  )
+  ggsave(paste0(out_prefix, "_example_genes_pseudotime.png"), p, width = 8, height = 8)
 
-# ---------------------------------------------------------------------------
-# Gene expression of a small number of genes using dot plot
-# ---------------------------------------------------------------------------
-library(scCustomize)
-scCustomize::Clustered_DotPlot(data, features = my_genes,
-                               raster = F, exp_color_min = -5, exp_color_max = 5,
-                               column_label_size = 16, legend_label_size = 10, legend_title_size = 10,
-                               row_label_size = 12, plot_km_elbow = FALSE)
-# ---------------------------------------------------------------------------
+  p <- plot_cells(
+    cds_subset,
+    label_cell_groups = FALSE,
+    genes = available,
+    show_trajectory_graph = FALSE,
+    cell_size = 1
+  )
+  ggsave(paste0(out_prefix, "_example_genes_umap.png"), p, width = 10, height = 8)
+
+  if (requireNamespace("scCustomize", quietly = TRUE)) {
+    png(
+      paste0(out_prefix, "_example_dotplot.png"),
+      width = 8, height = 6, units = "in", res = 150
+    )
+    scCustomize::Clustered_DotPlot(
+      obj,
+      features = available,
+      raster = FALSE,
+      exp_color_min = -5,
+      exp_color_max = 5,
+      column_label_size = 16,
+      legend_label_size = 10,
+      legend_title_size = 10,
+      row_label_size = 12,
+      plot_km_elbow = FALSE
+    )
+    dev.off()
+  } else {
+    message("Package scCustomize is not installed; skipping the clustered dot plot.")
+  }
+}
+
+message("Trajectory outputs written under ", results_dir, " with prefix trajectory_", condition)

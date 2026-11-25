@@ -151,17 +151,13 @@ p2 <- VlnPlot(
 ) + NoLegend()
 plot_grid(p1, p2)
 
-# saveRDS(obj, file.path(results_dir, "Harmony_newObj(27sep).RDS"))
-# obj <- readRDS(file.path(results_dir, "Harmony_newObj.RDS"))
-
 # ==============================================================================
 # UMAP + clustering on Harmony embeddings
 # ==============================================================================
 obj <- obj %>%
   RunUMAP(reduction = "harmony", dims = 1:30, verbose = FALSE) %>%
   FindNeighbors(reduction = "harmony", k.param = 10, dims = 1:30) %>%
-  FindClusters(resolution = 0.1) %>%
-  identity()
+  FindClusters(resolution = 0.1)
 
 obj <- SetIdent(obj, value = "orig.ident")
 DimPlot(obj, raster = FALSE, group.by = "status", reduction = "umap") +
@@ -184,8 +180,7 @@ write.csv(count_table, file.path(results_dir, "count_table_3C_(res_0.1).csv"))
 
 head(obj)
 tail(obj)
-saveRDS(obj, file.path(results_dir, "obj(p).RDS"))
-obj <- readRDS(file.path(results_dir, "obj(p).RDS"))
+saveRDS(obj, file.path(results_dir, "seurat_integrated.rds"))
 
 # ==============================================================================
 # Annotate clusters
@@ -209,9 +204,10 @@ obj_GBM  <- subset(x = obj, subset = status == "GBM")
 obj_Rec  <- subset(x = obj, subset = status == "Rec")
 obj_gIII <- subset(x = obj, subset = status == "gIII")
 
-saveRDS(obj_GBM,  file.path(results_dir, "Traject&CellChat_GBM.RDS"))
-saveRDS(obj_Rec,  file.path(results_dir, "Traject&CellChat_Rec.RDS"))
-saveRDS(obj_gIII, file.path(results_dir, "Traject&CellChat_gIII.RDS"))
+# Condition subsets used as input by scripts/trajectory.R
+saveRDS(obj_GBM,  file.path(results_dir, "seurat_GBM.rds"))
+saveRDS(obj_Rec,  file.path(results_dir, "seurat_Rec.rds"))
+saveRDS(obj_gIII, file.path(results_dir, "seurat_gIII.rds"))
 
 length(levels(obj))
 length(levels(obj$seurat_clusters))
@@ -233,8 +229,7 @@ Idents(obj) <- "celltype.status"
 length(levels(obj$celltype))
 head(obj)
 tail(obj)
-saveRDS(obj, file.path(results_dir, "obj_forDEGs.RDS"))
-obj <- readRDS(file.path(results_dir, "obj_forDEGs.RDS"))
+saveRDS(obj, file.path(results_dir, "seurat_for_degs.rds"))
 
 # --- Rec vs GBM ---------------------------------------------------------------
 GBMRec0 <- FindMarkers(obj, ident.1 = "Radial glial_Rec",        ident.2 = "Radial glial_GBM",        verbose = FALSE)
